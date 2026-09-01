@@ -8,9 +8,10 @@
   "scripts": {
     "dev": "vinext dev",
     "build": "vinext build",
+    "build:pages": "vite build --config vite.pages.config.ts && node scripts/copy-pages-build.mjs",
     "start": "wrangler dev --config dist/server/wrangler.json",
     "test:haze": "node --experimental-strip-types scripts/haze-self-test.ts",
-    "lint": "oxlint app lib scripts",
+    "lint": "oxlint app lib static-site scripts vite.pages.config.ts",
     "format": "oxfmt"
   },
   "dependencies": {

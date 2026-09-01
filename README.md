@@ -59,7 +59,28 @@ a nova track, contagem de amostras, trailer, layout e hash do `mdat`.
 
 ## Hospedagem
 
-O projeto usa Vinext e gera saída ESM compatível com Cloudflare Worker:
+### GitHub Pages
+
+O build estático usa a base `/haze/` e copia a saída publicável para a raiz do
+repositório:
+
+```powershell
+npm run build:pages
+git add .
+git commit -m "build: update GitHub Pages"
+git push
+```
+
+No GitHub, configure **Settings → Pages → Deploy from a branch**, selecione a branch
+`main` e a pasta `/(root)`. A página ficará em
+`https://alisonxz9g-hub.github.io/haze/`.
+
+Os arquivos `index.html`, `assets/`, `og.png`, `favicon.svg` e `.nojekyll` da raiz
+são a publicação estática. Eles devem ser versionados.
+
+### Cloudflare Worker
+
+O projeto também usa Vinext e gera saída ESM compatível com Cloudflare Worker:
 
 ```powershell
 $env:NEXT_PUBLIC_SITE_URL="https://seu-dominio.com"
