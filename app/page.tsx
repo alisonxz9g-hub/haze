@@ -30,22 +30,54 @@ function formatBytes(bytes: number) {
   return `${(bytes / 1024 ** index).toFixed(index ? 1 : 0)} ${units[index]}`;
 }
 
-function canUseNativeMobileSave() {
-  if (typeof window === 'undefined') return false;
+type PreparedDownload = {
+  blob: Blob;
+  url: string;
+  name: string;
+};
+
+type SavePickerWindow = Window & {
+  showSaveFilePicker?: (options: {
+    suggestedName: string;
+    startIn?: 'downloads' | 'videos';
+    types: Array<{
+      description: string;
+      accept: Record<string, string[]>;
+    }>;
+  }) => Promise<FileSystemFileHandle>;
+};
+
+function getNativeMobileSaveMode(
+  download: PreparedDownload | null,
+): 'picker' | 'share' | null {
+  if (!download || typeof window === 'undefined') return null;
 
   try {
-    const probe = new File([new Uint8Array()], 'haze-probe.mp4', {
+    const touchDevice =
+      navigator.maxTouchPoints > 0 &&
+      window.matchMedia('(pointer: coarse)').matches;
+    if (!touchDevice) return null;
+
+    if (
+      typeof (window as SavePickerWindow).showSaveFilePicker === 'function'
+    ) {
+      return 'picker';
+    }
+
+    const outputFile = new File([download.blob], download.name, {
       type: 'video/mp4',
     });
-    return (
-      navigator.maxTouchPoints > 0 &&
-      window.matchMedia('(pointer: coarse)').matches &&
+    if (
       typeof navigator.share === 'function' &&
       typeof navigator.canShare === 'function' &&
-      navigator.canShare({ files: [probe] })
-    );
+      navigator.canShare({ files: [outputFile] })
+    ) {
+      return 'share';
+    }
+
+    return null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -62,13 +94,11 @@ export default function Home() {
   });
   const [error, setError] = useState('');
   const [saveError, setSaveError] = useState('');
+  const [saveNotice, setSaveNotice] = useState('');
+  const [saving, setSaving] = useState(false);
   const [report, setReport] = useState<HazeReport | null>(null);
-  const [download, setDownload] = useState<{
-    blob: Blob;
-    url: string;
-    name: string;
-  } | null>(null);
-  const supportsNativeSave = download !== null && canUseNativeMobileSave();
+  const [download, setDownload] = useState<PreparedDownload | null>(null);
+  const nativeSaveMode = getNativeMobileSaveMode(download);
 
   useEffect(
     () => () => {
@@ -84,6 +114,8 @@ export default function Home() {
     setReport(null);
     setError('');
     setSaveError('');
+    setSaveNotice('');
+    setSaving(false);
     setStatus('idle');
     setProgress({ percent: 0, message: '' });
     setFile(next);
@@ -94,6 +126,8 @@ export default function Home() {
     setStatus('running');
     setError('');
     setSaveError('');
+    setSaveNotice('');
+    setSaving(false);
     setReport(null);
     setProgress({ percent: 4, message: 'Iniciando o laboratório local…' });
 
@@ -140,28 +174,59 @@ export default function Home() {
   }
 
   async function saveOnMobile() {
-    if (!download || typeof navigator.share !== 'function') return;
+    if (!download || !nativeSaveMode || saving) return;
 
     setSaveError('');
+    setSaveNotice('');
+    setSaving(true);
     try {
+      if (nativeSaveMode === 'picker') {
+        const saveWindow = window as SavePickerWindow;
+        if (!saveWindow.showSaveFilePicker) {
+          throw new Error('Seletor de arquivos indisponível.');
+        }
+
+        const handle = await saveWindow.showSaveFilePicker({
+          suggestedName: download.name,
+          startIn: 'downloads',
+          types: [
+            {
+              description: 'Vídeo MP4',
+              accept: { 'video/mp4': ['.mp4'] },
+            },
+          ],
+        });
+        const writable = await handle.createWritable();
+        await download.blob.stream().pipeTo(writable);
+        setSaveNotice('Vídeo salvo no aparelho.');
+        return;
+      }
+
       const outputFile = new File([download.blob], download.name, {
         type: 'video/mp4',
         lastModified: Date.now(),
       });
-      await navigator.share({
-        files: [outputFile],
-        title: download.name,
-      });
-    } catch (shareFailure) {
       if (
-        shareFailure instanceof DOMException &&
-        shareFailure.name === 'AbortError'
+        typeof navigator.share !== 'function' ||
+        typeof navigator.canShare !== 'function' ||
+        !navigator.canShare({ files: [outputFile] })
+      ) {
+        throw new Error('Compartilhamento de arquivos indisponível.');
+      }
+      await navigator.share({ files: [outputFile], title: download.name });
+      setSaveNotice('Arquivo entregue ao destino escolhido.');
+    } catch (saveFailure) {
+      if (
+        saveFailure instanceof DOMException &&
+        saveFailure.name === 'AbortError'
       ) {
         return;
       }
       setSaveError(
-        'O celular não conseguiu abrir o salvamento nativo. Use “Download direto” abaixo.',
+        'Não foi possível salvar pelo método nativo. Tente o download alternativo abaixo.',
       );
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -342,24 +407,24 @@ export default function Home() {
                     </p>
                   </div>
                 </div>
-                {supportsNativeSave ? (
-                  <div className="flex shrink-0 flex-col items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={saveOnMobile}
-                      className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-emerald-400 px-4 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
-                    >
+                {nativeSaveMode ? (
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={saveOnMobile}
+                    className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-emerald-400 px-4 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 disabled:cursor-wait disabled:opacity-70"
+                  >
+                    {saving ? (
+                      <LoaderCircle className="size-4 animate-spin" />
+                    ) : (
                       <Download className="size-4" />
-                      Salvar no celular
-                    </button>
-                    <a
-                      href={download.url}
-                      download={download.name}
-                      className="text-xs text-emerald-200/70 underline decoration-emerald-300/30 underline-offset-4 hover:text-emerald-100"
-                    >
-                      Download direto
-                    </a>
-                  </div>
+                    )}
+                    {saving
+                      ? 'Salvando…'
+                      : nativeSaveMode === 'picker'
+                        ? 'Salvar no aparelho'
+                        : 'Compartilhar / salvar'}
+                  </button>
                 ) : (
                   <a
                     href={download.url}
@@ -378,8 +443,25 @@ export default function Home() {
                 role="alert"
                 className="mt-3 rounded-lg border border-amber-400/20 bg-amber-400/6 px-4 py-3 text-xs leading-5 text-amber-100/75"
               >
-                {saveError}
+                <p>{saveError}</p>
+                {download && (
+                  <a
+                    href={download.url}
+                    download={download.name}
+                    className="mt-2 inline-block font-semibold text-amber-100 underline decoration-amber-300/40 underline-offset-4"
+                  >
+                    Download alternativo
+                  </a>
+                )}
               </div>
+            )}
+
+            {saveNotice && (
+              <output
+                className="mt-3 block rounded-lg border border-emerald-400/20 bg-emerald-400/6 px-4 py-3 text-xs leading-5 text-emerald-100/75"
+              >
+                {saveNotice}
+              </output>
             )}
           </section>
 

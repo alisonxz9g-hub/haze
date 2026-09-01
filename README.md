@@ -37,10 +37,12 @@ mais qualidade nem menos compressão.
 
 ## Download em celulares
 
-Em aparelhos compatíveis, o botão **Salvar no celular** abre o menu nativo do
-sistema. No iPhone/iPad, escolha **Salvar em Arquivos**; no Android, escolha o
-gerenciador de arquivos disponível. O link **Download direto** permanece como
-alternativa. No computador, o navegador continua usando o download direto normal.
+No Chrome para Android, o botão **Salvar no aparelho** abre o seletor do sistema e
+grava o MP4 diretamente na pasta escolhida, sem depender de uma URL `blob:` no
+gerenciador de downloads. Em navegadores compatíveis sem acesso direto ao sistema
+de arquivos, o site usa o menu nativo de compartilhamento. O download por URL
+temporária aparece apenas como último recurso. No computador, o navegador continua
+usando o download direto normal.
 
 ## Desenvolvimento
 
