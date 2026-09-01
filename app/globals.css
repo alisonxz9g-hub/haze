@@ -1,0 +1,84 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+}
+
+:root,
+.dark {
+  color-scheme: dark;
+  --background: #080d18;
+  --foreground: #e7eef8;
+  --card: #101827;
+  --card-foreground: #e7eef8;
+  --popover: #101827;
+  --popover-foreground: #e7eef8;
+  --primary: #39d89c;
+  --primary-foreground: #05271b;
+  --secondary: #182337;
+  --secondary-foreground: #dbe8f7;
+  --muted: #182337;
+  --muted-foreground: #8798b2;
+  --accent: #1b2a42;
+  --accent-foreground: #e7eef8;
+  --destructive: #fb7185;
+  --border: rgba(255, 255, 255, 0.1);
+  --input: rgba(255, 255, 255, 0.12);
+  --ring: #39d89c;
+  --radius: 0.75rem;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html {
+    @apply bg-background font-sans;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    background-image:
+      radial-gradient(circle at 18% 0%, rgba(38, 205, 144, 0.08), transparent 34rem),
+      radial-gradient(circle at 92% 22%, rgba(56, 142, 255, 0.07), transparent 28rem);
+  }
+
+  button,
+  input {
+    font: inherit;
+  }
+}
+
+::selection {
+  background: rgba(57, 216, 156, 0.28);
+  color: white;
+}
