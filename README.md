@@ -35,6 +35,13 @@ O resultado é deliberadamente não conforme ao ISO BMFF, porque o trailer fica 
 de qualquer box. O efeito em plataformas permanece hipótese; o site não promete
 mais qualidade nem menos compressão.
 
+## Download em celulares
+
+Em aparelhos compatíveis, o botão **Salvar no celular** abre o menu nativo do
+sistema. No iPhone/iPad, escolha **Salvar em Arquivos**; no Android, escolha o
+gerenciador de arquivos disponível. O link **Download direto** permanece como
+alternativa. No computador, o navegador continua usando o download direto normal.
+
 ## Desenvolvimento
 
 Requer Node.js 22.13 ou superior.

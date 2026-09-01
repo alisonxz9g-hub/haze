@@ -30,6 +30,25 @@ function formatBytes(bytes: number) {
   return `${(bytes / 1024 ** index).toFixed(index ? 1 : 0)} ${units[index]}`;
 }
 
+function canUseNativeMobileSave() {
+  if (typeof window === 'undefined') return false;
+
+  try {
+    const probe = new File([new Uint8Array()], 'haze-probe.mp4', {
+      type: 'video/mp4',
+    });
+    return (
+      navigator.maxTouchPoints > 0 &&
+      window.matchMedia('(pointer: coarse)').matches &&
+      typeof navigator.share === 'function' &&
+      typeof navigator.canShare === 'function' &&
+      navigator.canShare({ files: [probe] })
+    );
+  } catch {
+    return false;
+  }
+}
+
 export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -42,11 +61,14 @@ export default function Home() {
     message: '',
   });
   const [error, setError] = useState('');
+  const [saveError, setSaveError] = useState('');
   const [report, setReport] = useState<HazeReport | null>(null);
   const [download, setDownload] = useState<{
+    blob: Blob;
     url: string;
     name: string;
   } | null>(null);
+  const supportsNativeSave = download !== null && canUseNativeMobileSave();
 
   useEffect(
     () => () => {
@@ -61,6 +83,7 @@ export default function Home() {
     setDownload(null);
     setReport(null);
     setError('');
+    setSaveError('');
     setStatus('idle');
     setProgress({ percent: 0, message: '' });
     setFile(next);
@@ -70,6 +93,7 @@ export default function Home() {
     if (!file || status === 'running') return;
     setStatus('running');
     setError('');
+    setSaveError('');
     setReport(null);
     setProgress({ percent: 4, message: 'Iniciando o laboratório local…' });
 
@@ -94,6 +118,7 @@ export default function Home() {
         const result = event.data.result;
         if (download) URL.revokeObjectURL(download.url);
         setDownload({
+          blob: result.output,
           url: URL.createObjectURL(result.output),
           name: result.outputName,
         });
@@ -112,6 +137,32 @@ export default function Home() {
       worker.terminate();
     };
     worker.postMessage({ file });
+  }
+
+  async function saveOnMobile() {
+    if (!download || typeof navigator.share !== 'function') return;
+
+    setSaveError('');
+    try {
+      const outputFile = new File([download.blob], download.name, {
+        type: 'video/mp4',
+        lastModified: Date.now(),
+      });
+      await navigator.share({
+        files: [outputFile],
+        title: download.name,
+      });
+    } catch (shareFailure) {
+      if (
+        shareFailure instanceof DOMException &&
+        shareFailure.name === 'AbortError'
+      ) {
+        return;
+      }
+      setSaveError(
+        'O celular não conseguiu abrir o salvamento nativo. Use “Download direto” abaixo.',
+      );
+    }
   }
 
   return (
@@ -215,7 +266,7 @@ export default function Home() {
                     Arraste o vídeo aqui
                   </p>
                   <p className="mt-1 text-sm text-slate-500">
-                    ou clique para selecionar no computador
+                    ou toque para selecionar no dispositivo
                   </p>
                 </>
               )}
@@ -291,14 +342,43 @@ export default function Home() {
                     </p>
                   </div>
                 </div>
-                <a
-                  href={download.url}
-                  download={download.name}
-                  className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-emerald-400 px-4 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
-                >
-                  <Download className="size-4" />
-                  Baixar MP4
-                </a>
+                {supportsNativeSave ? (
+                  <div className="flex shrink-0 flex-col items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={saveOnMobile}
+                      className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-emerald-400 px-4 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
+                    >
+                      <Download className="size-4" />
+                      Salvar no celular
+                    </button>
+                    <a
+                      href={download.url}
+                      download={download.name}
+                      className="text-xs text-emerald-200/70 underline decoration-emerald-300/30 underline-offset-4 hover:text-emerald-100"
+                    >
+                      Download direto
+                    </a>
+                  </div>
+                ) : (
+                  <a
+                    href={download.url}
+                    download={download.name}
+                    className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-emerald-400 px-4 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
+                  >
+                    <Download className="size-4" />
+                    Baixar MP4
+                  </a>
+                )}
+              </div>
+            )}
+
+            {saveError && (
+              <div
+                role="alert"
+                className="mt-3 rounded-lg border border-amber-400/20 bg-amber-400/6 px-4 py-3 text-xs leading-5 text-amber-100/75"
+              >
+                {saveError}
               </div>
             )}
           </section>
