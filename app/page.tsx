@@ -36,13 +36,25 @@ type PreparedDownload = {
   name: string;
 };
 
-function shouldStreamToBrowserDownload() {
+type SavePickerWindow = Window & {
+  showSaveFilePicker?: (options?: {
+    suggestedName?: string;
+  }) => Promise<FileSystemFileHandle>;
+};
+
+function isTouchDevice() {
   return (
     typeof window !== 'undefined' &&
-    window.isSecureContext &&
     navigator.maxTouchPoints > 0 &&
-    window.matchMedia('(pointer: coarse)').matches &&
-    'serviceWorker' in navigator
+    window.matchMedia('(pointer: coarse)').matches
+  );
+}
+
+function supportsDirectFileSave() {
+  return (
+    isTouchDevice() &&
+    window.isSecureContext &&
+    typeof (window as SavePickerWindow).showSaveFilePicker === 'function'
   );
 }
 
@@ -140,24 +152,49 @@ export default function Home() {
   async function downloadMp4() {
     if (!download || saving) return;
 
+    let outputHandle: FileSystemFileHandle | null = null;
+
+    if (supportsDirectFileSave()) {
+      try {
+        const saveWindow = window as SavePickerWindow;
+        if (!saveWindow.showSaveFilePicker) {
+          throw new Error('Seletor de arquivos indisponível.');
+        }
+
+        // O seletor precisa ser aberto diretamente pelo toque do usuário.
+        // Não execute nenhuma operação assíncrona antes desta chamada.
+        outputHandle = await saveWindow.showSaveFilePicker({
+          suggestedName: download.name,
+        });
+      } catch (saveFailure) {
+        if (
+          saveFailure instanceof DOMException &&
+          saveFailure.name === 'AbortError'
+        ) {
+          return;
+        }
+
+        const detail =
+          saveFailure instanceof Error ? ` (${saveFailure.message})` : '';
+        setSaveError(`O Chrome não abriu o local para salvar${detail}`);
+        return;
+      }
+    }
+
     setSaveError('');
     setSaveNotice('');
     setSaving(true);
     try {
-      if (shouldStreamToBrowserDownload()) {
-        const { default: streamSaver } = await import('streamsaver');
-        const siteRoot = new URL('./', window.location.href);
-        streamSaver.mitm = new URL(
-          'streamsaver/mitm.html?version=2.0.0',
-          siteRoot,
-        ).href;
-        const browserDownload = streamSaver.createWriteStream(download.name, {
-          size: download.blob.size,
-        });
-        await download.blob.stream().pipeTo(browserDownload);
-        setSaveNotice(
-          'Download concluído pelo Chrome. O MP4 está na pasta de downloads.',
-        );
+      if (outputHandle) {
+        const writable = await outputHandle.createWritable();
+        try {
+          await writable.write(download.blob);
+          await writable.close();
+        } catch (writeFailure) {
+          await writable.abort().catch(() => undefined);
+          throw writeFailure;
+        }
+        setSaveNotice('MP4 salvo no aparelho.');
         return;
       }
 
@@ -169,9 +206,11 @@ export default function Home() {
       anchor.click();
       anchor.remove();
       setSaveNotice('Download iniciado pelo navegador.');
-    } catch {
+    } catch (saveFailure) {
+      const detail =
+        saveFailure instanceof Error ? ` (${saveFailure.message})` : '';
       setSaveError(
-        'O Chrome não conseguiu iniciar o download local. Mantenha esta página aberta e tente novamente.',
+        `Não foi possível gravar o MP4 no aparelho${detail}`,
       );
     } finally {
       setSaving(false);
@@ -366,7 +405,7 @@ export default function Home() {
                   ) : (
                     <Download className="size-4" />
                   )}
-                  {saving ? 'Baixando…' : 'Baixar MP4'}
+                  {saving ? 'Salvando…' : 'Baixar MP4'}
                 </button>
               </div>
             )}

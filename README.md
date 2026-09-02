@@ -37,10 +37,10 @@ mais qualidade nem menos compressão.
 
 ## Download em celulares
 
-O botão **Baixar MP4** usa o download padrão do Chrome. No Android, o arquivo é
-entregue em fluxo por um Service Worker do próprio site, com os headers de download
-normais, evitando a falha do gerenciador com URLs `blob:` grandes. O MP4 não é
-enviado a servidor algum. Mantenha a página aberta até o Chrome concluir o download.
+O botão **Baixar MP4** usa o seletor de arquivos do Chrome no Android e grava o
+`Blob` final diretamente no destino escolhido. Não são usadas URLs `blob:` no
+gerenciador de downloads nem um Service Worker intermediário. O MP4 não é enviado
+a servidor algum. O salvamento direto requer Chrome 132 ou mais recente no Android.
 No computador, o navegador continua usando o download direto normal.
 
 ## Desenvolvimento
