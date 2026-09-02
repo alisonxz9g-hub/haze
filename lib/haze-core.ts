@@ -692,7 +692,10 @@ export async function transformObservedHaze(
     [
       asArrayBuffer(ftypBytes),
       asArrayBuffer(finalMoov),
-      file.slice(mdat.offset, mdat.end),
+      // O Blob final precisa possuir uma cópia da mídia. Manter um File.slice()
+      // aqui deixa a saída dependente da permissão temporária do seletor Android;
+      // ao abrir o diálogo para salvar, o Chrome pode invalidar essa referência.
+      asArrayBuffer(bytes.subarray(mdat.offset, mdat.end)),
       ...trailerParts.map(asArrayBuffer),
     ],
     { type: 'video/mp4' },

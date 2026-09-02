@@ -102,7 +102,15 @@ function fixture() {
 }
 
 const input = fixture();
-const file = new File([input], 'fixture.mp4', { type: 'video/mp4' });
+class EphemeralSourceFile extends File {
+  override slice(): Blob {
+    throw new Error('A saída não pode depender de File.slice().');
+  }
+}
+
+const file = new EphemeralSourceFile([input], 'fixture.mp4', {
+  type: 'video/mp4',
+});
 const result = await transformObservedHaze(file);
 const output = new Uint8Array(await result.output.arrayBuffer());
 const expectedSample = [0, 0, 0, 4, 0, 0, 0, 0];
