@@ -36,49 +36,14 @@ type PreparedDownload = {
   name: string;
 };
 
-type SavePickerWindow = Window & {
-  showSaveFilePicker?: (options: {
-    suggestedName: string;
-    startIn?: 'downloads' | 'videos';
-    types: Array<{
-      description: string;
-      accept: Record<string, string[]>;
-    }>;
-  }) => Promise<FileSystemFileHandle>;
-};
-
-function getNativeMobileSaveMode(
-  download: PreparedDownload | null,
-): 'picker' | 'share' | null {
-  if (!download || typeof window === 'undefined') return null;
-
-  try {
-    const touchDevice =
-      navigator.maxTouchPoints > 0 &&
-      window.matchMedia('(pointer: coarse)').matches;
-    if (!touchDevice) return null;
-
-    if (
-      typeof (window as SavePickerWindow).showSaveFilePicker === 'function'
-    ) {
-      return 'picker';
-    }
-
-    const outputFile = new File([download.blob], download.name, {
-      type: 'video/mp4',
-    });
-    if (
-      typeof navigator.share === 'function' &&
-      typeof navigator.canShare === 'function' &&
-      navigator.canShare({ files: [outputFile] })
-    ) {
-      return 'share';
-    }
-
-    return null;
-  } catch {
-    return null;
-  }
+function shouldStreamToBrowserDownload() {
+  return (
+    typeof window !== 'undefined' &&
+    window.isSecureContext &&
+    navigator.maxTouchPoints > 0 &&
+    window.matchMedia('(pointer: coarse)').matches &&
+    'serviceWorker' in navigator
+  );
 }
 
 export default function Home() {
@@ -98,7 +63,6 @@ export default function Home() {
   const [saving, setSaving] = useState(false);
   const [report, setReport] = useState<HazeReport | null>(null);
   const [download, setDownload] = useState<PreparedDownload | null>(null);
-  const nativeSaveMode = getNativeMobileSaveMode(download);
 
   useEffect(
     () => () => {
@@ -173,57 +137,41 @@ export default function Home() {
     worker.postMessage({ file });
   }
 
-  async function saveOnMobile() {
-    if (!download || !nativeSaveMode || saving) return;
+  async function downloadMp4() {
+    if (!download || saving) return;
 
     setSaveError('');
     setSaveNotice('');
     setSaving(true);
     try {
-      if (nativeSaveMode === 'picker') {
-        const saveWindow = window as SavePickerWindow;
-        if (!saveWindow.showSaveFilePicker) {
-          throw new Error('Seletor de arquivos indisponível.');
-        }
-
-        const handle = await saveWindow.showSaveFilePicker({
-          suggestedName: download.name,
-          startIn: 'downloads',
-          types: [
-            {
-              description: 'Vídeo MP4',
-              accept: { 'video/mp4': ['.mp4'] },
-            },
-          ],
+      if (shouldStreamToBrowserDownload()) {
+        const { default: streamSaver } = await import('streamsaver');
+        const siteRoot = new URL('./', window.location.href);
+        streamSaver.mitm = new URL(
+          'streamsaver/mitm.html?version=2.0.0',
+          siteRoot,
+        ).href;
+        const browserDownload = streamSaver.createWriteStream(download.name, {
+          size: download.blob.size,
         });
-        const writable = await handle.createWritable();
-        await download.blob.stream().pipeTo(writable);
-        setSaveNotice('Vídeo salvo no aparelho.');
+        await download.blob.stream().pipeTo(browserDownload);
+        setSaveNotice(
+          'Download concluído pelo Chrome. O MP4 está na pasta de downloads.',
+        );
         return;
       }
 
-      const outputFile = new File([download.blob], download.name, {
-        type: 'video/mp4',
-        lastModified: Date.now(),
-      });
-      if (
-        typeof navigator.share !== 'function' ||
-        typeof navigator.canShare !== 'function' ||
-        !navigator.canShare({ files: [outputFile] })
-      ) {
-        throw new Error('Compartilhamento de arquivos indisponível.');
-      }
-      await navigator.share({ files: [outputFile], title: download.name });
-      setSaveNotice('Arquivo entregue ao destino escolhido.');
-    } catch (saveFailure) {
-      if (
-        saveFailure instanceof DOMException &&
-        saveFailure.name === 'AbortError'
-      ) {
-        return;
-      }
+      const anchor = document.createElement('a');
+      anchor.href = download.url;
+      anchor.download = download.name;
+      anchor.rel = 'noopener';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setSaveNotice('Download iniciado pelo navegador.');
+    } catch {
       setSaveError(
-        'Não foi possível salvar pelo método nativo. Tente o download alternativo abaixo.',
+        'O Chrome não conseguiu iniciar o download local. Mantenha esta página aberta e tente novamente.',
       );
     } finally {
       setSaving(false);
@@ -407,34 +355,19 @@ export default function Home() {
                     </p>
                   </div>
                 </div>
-                {nativeSaveMode ? (
-                  <button
-                    type="button"
-                    disabled={saving}
-                    onClick={saveOnMobile}
-                    className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-emerald-400 px-4 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 disabled:cursor-wait disabled:opacity-70"
-                  >
-                    {saving ? (
-                      <LoaderCircle className="size-4 animate-spin" />
-                    ) : (
-                      <Download className="size-4" />
-                    )}
-                    {saving
-                      ? 'Salvando…'
-                      : nativeSaveMode === 'picker'
-                        ? 'Salvar no aparelho'
-                        : 'Compartilhar / salvar'}
-                  </button>
-                ) : (
-                  <a
-                    href={download.url}
-                    download={download.name}
-                    className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-emerald-400 px-4 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
-                  >
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={downloadMp4}
+                  className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-emerald-400 px-4 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 disabled:cursor-wait disabled:opacity-70"
+                >
+                  {saving ? (
+                    <LoaderCircle className="size-4 animate-spin" />
+                  ) : (
                     <Download className="size-4" />
-                    Baixar MP4
-                  </a>
-                )}
+                  )}
+                  {saving ? 'Baixando…' : 'Baixar MP4'}
+                </button>
               </div>
             )}
 
@@ -444,15 +377,6 @@ export default function Home() {
                 className="mt-3 rounded-lg border border-amber-400/20 bg-amber-400/6 px-4 py-3 text-xs leading-5 text-amber-100/75"
               >
                 <p>{saveError}</p>
-                {download && (
-                  <a
-                    href={download.url}
-                    download={download.name}
-                    className="mt-2 inline-block font-semibold text-amber-100 underline decoration-amber-300/40 underline-offset-4"
-                  >
-                    Download alternativo
-                  </a>
-                )}
               </div>
             )}
 

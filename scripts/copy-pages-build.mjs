@@ -12,6 +12,7 @@ const allowedOutputs = new Set([
   'favicon.svg',
   'index.html',
   'og.png',
+  'streamsaver',
 ]);
 const entries = await readdir(buildRoot, { withFileTypes: true });
 
