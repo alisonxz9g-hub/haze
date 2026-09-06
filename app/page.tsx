@@ -210,13 +210,13 @@ export default function Home() {
   }
 
   return (
-    <div className="haze-app">
+    <div className="haze-app" id="inicio">
       <a className="skip-link" href="#conteudo">
         Pular para o conteúdo
       </a>
       <header className="site-header">
         <div className="page-shell header-inner">
-          <a className="brand" href="#" aria-label="Haze, início">
+          <a className="brand" href="#inicio" aria-label="Haze, início">
             <span className="brand-mark" aria-hidden="true">
               <i />
               <i />
@@ -458,7 +458,7 @@ export default function Home() {
                 </button>
               </div>
             </div>
-            <div className="live-message sr-only" role="status" aria-live="polite">
+            <output className="live-message sr-only" aria-live="polite">
               {status === 'running'
                 ? progress.message
                 : status === 'success'
@@ -466,7 +466,7 @@ export default function Home() {
                   : file && status === 'idle'
                     ? `Arquivo ${file.name} selecionado.`
                     : ''}
-            </div>
+            </output>
             {status === 'running' && (
               <div className="processing-state">
                 <div className="progress-caption">
