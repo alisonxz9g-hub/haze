@@ -1,0 +1,78 @@
+name: Prepare GitHub Pages build
+
+on:
+  push:
+    branches:
+      - design/haze-ui-refresh
+    paths:
+      - 'app/**'
+      - 'components/**'
+      - 'lib/**'
+      - 'public/**'
+      - 'static-site/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.pages.config.ts'
+      - 'tsconfig.json'
+      - '.oxlintrc.json'
+      - '.github/workflows/prepare-pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prepare-pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/design/haze-ui-refresh'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the exact source revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Test the Haze processor
+        run: npm run test:haze
+
+      - name: Lint and type-check
+        run: npm run lint
+
+      - name: Build GitHub Pages assets
+        run: npm run build:pages
+
+      - name: Commit the validated publication files
+        env:
+          BUILD_SOURCE_SHA: ${{ github.sha }}
+          BUILD_BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          remote_sha="$(git ls-remote --exit-code origin "refs/heads/$BUILD_BRANCH" | cut -f1)"
+          test "$remote_sha" = "$BUILD_SOURCE_SHA"
+          git add -- index.html assets favicon.svg og.png
+          if git diff --cached --quiet; then
+            echo 'Publication files already match the validated build.'
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -m 'build: prepare tested Haze Pages assets' \
+            -m "Validated source: $BUILD_SOURCE_SHA" \
+            -m 'Checks: npm ci, npm run test:haze, npm run lint, npm run build:pages.'
+          git push origin "HEAD:$BUILD_BRANCH"
