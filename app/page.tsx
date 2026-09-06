@@ -1,80 +1,62 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import {
-  AlertTriangle,
-  Check,
-  CircleX,
-  Download,
-  FileVideo,
-  FlaskConical,
-  LoaderCircle,
-  LockKeyhole,
-  ScanSearch,
-  ShieldCheck,
-  UploadCloud,
-} from 'lucide-react';
-
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Progress, ProgressLabel } from '@/components/ui/progress';
+import { HazeIcon } from '@/components/haze-icon';
 import type { HazeProgress, HazeReport, HazeResult } from '@/lib/haze-core';
 
 function formatBytes(bytes: number) {
   if (!bytes) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB'];
+  const units = ['B', 'KiB', 'MiB', 'GiB'];
   const index = Math.min(
     Math.floor(Math.log(bytes) / Math.log(1024)),
     units.length - 1,
   );
-  return `${(bytes / 1024 ** index).toFixed(index ? 1 : 0)} ${units[index]}`;
+  return `${(bytes / 1024 ** index).toLocaleString('pt-BR', { maximumFractionDigits: index ? 1 : 0 })} ${units[index]}`;
 }
 
-type PreparedDownload = {
-  blob: Blob;
-  url: string;
-  name: string;
-};
-
+type PreparedDownload = { blob: Blob; url: string; name: string };
 type SavePickerWindow = Window & {
   showSaveFilePicker?: (options?: {
     suggestedName?: string;
   }) => Promise<FileSystemFileHandle>;
 };
 
-function isTouchDevice() {
+function supportsDirectFileSave() {
   return (
     typeof window !== 'undefined' &&
     navigator.maxTouchPoints > 0 &&
-    window.matchMedia('(pointer: coarse)').matches
-  );
-}
-
-function supportsDirectFileSave() {
-  return (
-    isTouchDevice() &&
+    window.matchMedia('(pointer: coarse)').matches &&
     window.isSecureContext &&
     typeof (window as SavePickerWindow).showSaveFilePicker === 'function'
   );
 }
 
+const transformations = [
+  ['Fast start', 'Move moov para antes do mdat.'],
+  ['Timeline', 'Remove as listas de edição edts.'],
+  ['Track AAC', 'Clona o áudio e adiciona amostras artificiais.'],
+  ['Assinatura Haze', 'Acrescenta o trailer experimental.'],
+];
+
 export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
+  const workerRef = useRef<Worker | null>(null);
+  const dragDepth = useRef(0);
   const [file, setFile] = useState<File | null>(null);
   const [dragging, setDragging] = useState(false);
-  const [status, setStatus] = useState<
-    'idle' | 'running' | 'success' | 'error'
-  >('idle');
-  const [progress, setProgress] = useState<HazeProgress>({
-    percent: 0,
-    message: '',
-  });
+  const [status, setStatus] = useState<'idle' | 'running' | 'success' | 'error'>(
+    'idle',
+  );
+  const [progress, setProgress] = useState<HazeProgress>({ percent: 0, message: '' });
   const [error, setError] = useState('');
   const [saveError, setSaveError] = useState('');
   const [saveNotice, setSaveNotice] = useState('');
   const [saving, setSaving] = useState(false);
   const [report, setReport] = useState<HazeReport | null>(null);
   const [download, setDownload] = useState<PreparedDownload | null>(null);
+  const busy = status === 'running' || saving;
+  const activeStep = status === 'success' ? 2 : file ? 1 : 0;
+  const percent = Math.max(0, Math.min(100, Math.round(progress.percent)));
 
   useEffect(
     () => () => {
@@ -82,105 +64,119 @@ export default function Home() {
     },
     [download],
   );
+  useEffect(
+    () => () => {
+      workerRef.current?.terminate();
+    },
+    [],
+  );
 
-  function choose(next: File | undefined) {
-    if (!next) return;
-    if (download) URL.revokeObjectURL(download.url);
+  function choose(next: File | null) {
+    if (busy) return;
     setDownload(null);
     setReport(null);
     setError('');
     setSaveError('');
     setSaveNotice('');
-    setSaving(false);
     setStatus('idle');
     setProgress({ percent: 0, message: '' });
+    setFile(null);
+    if (!next) return;
+    if (!/\.(mp4|m4v)$/i.test(next.name) || next.size > 1024 ** 3 || next.size < 8) {
+      setError(
+        !/\.(mp4|m4v)$/i.test(next.name)
+          ? 'Selecione um arquivo .mp4 ou .m4v com áudio AAC.'
+          : next.size > 1024 ** 3
+            ? 'O limite é de 1 GiB por arquivo. Escolha um vídeo menor.'
+            : 'Este arquivo é pequeno demais para ser um MP4 válido.',
+      );
+      setStatus('error');
+      return;
+    }
     setFile(next);
   }
 
   function processFile() {
-    if (!file || status === 'running') return;
+    if (!file || busy) return;
     setStatus('running');
+    setDownload(null);
     setError('');
     setSaveError('');
     setSaveNotice('');
-    setSaving(false);
     setReport(null);
     setProgress({ percent: 4, message: 'Iniciando o laboratório local…' });
-
-    const worker = new Worker(
-      new URL('../lib/haze-worker.ts', import.meta.url),
-      {
+    try {
+      const worker = new Worker(new URL('../lib/haze-worker.ts', import.meta.url), {
         type: 'module',
-      },
-    );
-    worker.onmessage = (
-      event: MessageEvent<
-        | { type: 'progress'; progress: HazeProgress }
-        | { type: 'success'; result: HazeResult }
-        | { type: 'error'; message: string }
-      >,
-    ) => {
-      if (event.data.type === 'progress') {
-        setProgress(event.data.progress);
-        return;
-      }
-      if (event.data.type === 'success') {
-        const result = event.data.result;
-        if (download) URL.revokeObjectURL(download.url);
-        setDownload({
-          blob: result.output,
-          url: URL.createObjectURL(result.output),
-          name: result.outputName,
-        });
-        setReport(result.report);
-        setStatus('success');
+      });
+      workerRef.current = worker;
+      const finish = () => {
         worker.terminate();
-        return;
-      }
-      setError(event.data.message);
+        workerRef.current = null;
+      };
+      worker.onmessage = (
+        event: MessageEvent<
+          | { type: 'progress'; progress: HazeProgress }
+          | { type: 'success'; result: HazeResult }
+          | { type: 'error'; message: string }
+        >,
+      ) => {
+        if (workerRef.current !== worker) return;
+        if (event.data.type === 'progress') {
+          setProgress(event.data.progress);
+          return;
+        }
+        if (event.data.type === 'success') {
+          const result = event.data.result;
+          setDownload({
+            blob: result.output,
+            url: URL.createObjectURL(result.output),
+            name: result.outputName,
+          });
+          setReport(result.report);
+          setStatus('success');
+        } else {
+          setError(event.data.message);
+          setStatus('error');
+        }
+        finish();
+      };
+      worker.onerror = () => {
+        setError('O navegador interrompeu o processamento. Tente novamente.');
+        setStatus('error');
+        finish();
+      };
+      worker.postMessage({ file });
+    } catch {
+      workerRef.current?.terminate();
+      workerRef.current = null;
+      setError(
+        'Não foi possível iniciar o processamento local. Recarregue a página em um navegador atualizado.',
+      );
       setStatus('error');
-      worker.terminate();
-    };
-    worker.onerror = () => {
-      setError('O navegador interrompeu o processamento. Tente novamente.');
-      setStatus('error');
-      worker.terminate();
-    };
-    worker.postMessage({ file });
+    }
   }
 
   async function downloadMp4() {
     if (!download || saving) return;
-
     let outputHandle: FileSystemFileHandle | null = null;
-
     if (supportsDirectFileSave()) {
       try {
         const saveWindow = window as SavePickerWindow;
-        if (!saveWindow.showSaveFilePicker) {
+        if (!saveWindow.showSaveFilePicker)
           throw new Error('Seletor de arquivos indisponível.');
-        }
-
-        // O seletor precisa ser aberto diretamente pelo toque do usuário.
-        // Não execute nenhuma operação assíncrona antes desta chamada.
+        // Preserve a ativação do toque: nenhuma operação assíncrona antes do seletor.
         outputHandle = await saveWindow.showSaveFilePicker({
           suggestedName: download.name,
         });
       } catch (saveFailure) {
-        if (
-          saveFailure instanceof DOMException &&
-          saveFailure.name === 'AbortError'
-        ) {
+        if (saveFailure instanceof DOMException && saveFailure.name === 'AbortError')
           return;
-        }
-
-        const detail =
-          saveFailure instanceof Error ? ` (${saveFailure.message})` : '';
+        const detail = saveFailure instanceof Error ? ` (${saveFailure.message})` : '';
         setSaveError(`O Chrome não abriu o local para salvar${detail}`);
         return;
       }
     }
-
     setSaveError('');
     setSaveNotice('');
     setSaving(true);
@@ -197,7 +193,6 @@ export default function Home() {
         setSaveNotice('MP4 salvo no aparelho.');
         return;
       }
-
       const anchor = document.createElement('a');
       anchor.href = download.url;
       anchor.download = download.name;
@@ -207,366 +202,508 @@ export default function Home() {
       anchor.remove();
       setSaveNotice('Download iniciado pelo navegador.');
     } catch (saveFailure) {
-      const detail =
-        saveFailure instanceof Error ? ` (${saveFailure.message})` : '';
-      setSaveError(
-        `Não foi possível gravar o MP4 no aparelho${detail}`,
-      );
+      const detail = saveFailure instanceof Error ? ` (${saveFailure.message})` : '';
+      setSaveError(`Não foi possível gravar o MP4 no aparelho${detail}`);
     } finally {
       setSaving(false);
     }
   }
 
   return (
-    <main className="min-h-screen bg-background text-foreground">
-      <header className="border-b border-white/8 bg-[#080d18]/90 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-4 sm:px-8">
-          <div className="flex items-center gap-3">
-            <div className="grid size-10 place-items-center rounded-xl border border-emerald-400/25 bg-emerald-400/10 text-emerald-300">
-              <FlaskConical className="size-5" />
-            </div>
-            <div>
-              <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.22em] text-emerald-300/80">
-                Container laboratory
-              </p>
-              <h1 className="text-base font-semibold tracking-tight text-white sm:text-lg">
-                Observed Haze 4.0
-              </h1>
-            </div>
-          </div>
-          <Badge className="gap-1.5 border-emerald-400/25 bg-emerald-400/10 px-3 py-2 text-emerald-200">
-            <LockKeyhole className="size-3.5" />
-            100% no navegador
-          </Badge>
+    <div className="haze-app" id="inicio">
+      <a className="skip-link" href="#conteudo">
+        Pular para o conteúdo
+      </a>
+      <header className="site-header">
+        <div className="page-shell header-inner">
+          <a className="brand" href="#inicio" aria-label="Haze, início">
+            <span className="brand-mark" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+            </span>
+            <span className="brand-word">
+              haze<span className="brand-period">.</span>
+            </span>
+            <span className="brand-version">4.0</span>
+          </a>
+          <nav className="header-nav" aria-label="Navegação principal">
+            <a className="nav-current" href="#laboratorio">
+              Laboratório
+            </a>
+            <a href="#compatibilidade">Compatibilidade</a>
+          </nav>
+          <a
+            className="source-link"
+            href="https://github.com/alisonxz9g-hub/haze"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Código-fonte <HazeIcon name="external" />
+          </a>
         </div>
       </header>
 
-      <section className="mx-auto max-w-6xl px-5 py-10 sm:px-8 sm:py-14">
-        <div className="mb-8 max-w-3xl">
-          <Badge
-            variant="outline"
-            className="mb-4 border-amber-400/30 bg-amber-400/8 text-amber-200"
-          >
-            OBSERVED · EXPERIMENTAL · NOT ISO BMFF COMPLIANT
-          </Badge>
-          <h2 className="text-3xl font-semibold leading-tight tracking-[-0.035em] text-white sm:text-5xl">
-            Reestruture seu MP4.
-            <br />
-            <span className="text-slate-400">Sem enviar o vídeo.</span>
-          </h2>
-          <p className="mt-5 max-w-2xl text-sm leading-6 text-slate-400 sm:text-base">
-            Réplica da mutação de contêiner observada no Haze Engine 4.0. O
-            processamento acontece localmente e preserva os streams compatíveis
-            sem recodificação.
-          </p>
-        </div>
-
-        <div className="grid gap-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(300px,.75fr)]">
-          <section className="rounded-2xl border border-white/10 bg-card p-4 shadow-2xl shadow-black/20 sm:p-6">
-            <div className="mb-5 flex items-start justify-between gap-4">
-              <div>
-                <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                  Arquivo de entrada
-                </p>
-                <h3 className="mt-1 text-lg font-semibold text-white">
-                  Selecione um MP4 com áudio AAC
-                </h3>
-              </div>
-              <span className="rounded-lg border border-white/8 bg-white/4 px-2.5 py-1 font-mono text-[10px] text-slate-400">
-                MP4 · M4V
+      <main id="conteudo" className="page-shell">
+        <section className="hero" aria-labelledby="hero-title">
+          <div className="hero-copy">
+            <p className="eyebrow">
+              <span className="status-dot" /> MP4 CONTAINER LAB{' '}
+              <span className="eyebrow-divider">/</span> OBSERVED 4.0
+            </p>
+            <h1 id="hero-title">
+              Um novo contêiner.
+              <br />
+              <span>O mesmo vídeo.</span>
+            </h1>
+            <p className="hero-description">
+              Reestruture seu MP4 direto no navegador, sem recodificar os streams
+              compatíveis. Seu vídeo não precisa sair do seu dispositivo.
+            </p>
+            <div className="hero-benefits">
+              <span>
+                <HazeIcon name="lock" /> Sem upload
+              </span>
+              <span>
+                <HazeIcon name="shield" /> Original intacto
+              </span>
+              <span className="experimental-label">
+                <HazeIcon name="warning" /> Experimental
               </span>
             </div>
+          </div>
+          <div
+            className="container-map"
+            aria-label="Esquema simplificado: o moov é movido para antes do mdat e um trailer é acrescentado."
+          >
+            <div className="map-heading">
+              <span className="eyebrow">POR DENTRO DO MP4</span>
+              <span className="map-file">.mp4</span>
+            </div>
+            <div className="map-row-label">
+              Estrutura de entrada <span>ANTES</span>
+            </div>
+            <div className="box-track" aria-hidden="true">
+              <span className="box-small">ftyp</span>
+              <span className="box-media">mdat</span>
+              <span className="box-moov">moov</span>
+            </div>
+            <div className="map-connector">
+              <span />
+              <HazeIcon name="download" />
+              <span />
+            </div>
+            <div className="map-row-label">
+              Variante Haze <span>DEPOIS</span>
+            </div>
+            <div className="box-track box-track-output" aria-hidden="true">
+              <span className="box-small">ftyp</span>
+              <span className="box-moov">moov</span>
+              <span className="box-media">mdat</span>
+              <span className="box-trailer">+</span>
+            </div>
+            <p className="map-caption">
+              Esquema simplificado · mídia preservada, estrutura alterada.
+            </p>
+          </div>
+        </section>
 
+        <section
+          id="laboratorio"
+          className="workspace"
+          aria-label="Laboratório de processamento"
+        >
+          <div className="upload-panel panel">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">SEU ESPAÇO DE TRABALHO</p>
+                <h2>Comece pelo seu vídeo.</h2>
+              </div>
+              <span
+                className={`state-tag ${status === 'success' ? 'state-tag-success' : ''}`}
+              >
+                <span className="status-dot" />
+                {status === 'running'
+                  ? 'Processando'
+                  : status === 'success'
+                    ? 'Concluído'
+                    : status === 'error'
+                      ? 'Verifique o arquivo'
+                      : file
+                        ? 'Selecionado'
+                        : 'Aguardando arquivo'}
+              </span>
+            </div>
+            <ol className="workflow-steps" aria-label="Etapas do processamento">
+              {['Selecionar', 'Processar', 'Baixar'].map((label, index) => (
+                <li
+                  key={label}
+                  className={index <= activeStep ? 'step-active' : ''}
+                  aria-current={index === activeStep ? 'step' : undefined}
+                >
+                  <span className="step-number">
+                    {index < activeStep ? <HazeIcon name="check" /> : `0${index + 1}`}
+                  </span>
+                  <span>{label}</span>
+                </li>
+              ))}
+            </ol>
             <button
               type="button"
+              className={`dropzone ${dragging ? 'dropzone-dragging' : ''} ${file ? 'dropzone-selected' : ''}`}
+              disabled={busy}
+              aria-label={
+                file ? `Trocar arquivo: ${file.name}` : 'Selecionar vídeo MP4 ou M4V'
+              }
+              aria-describedby="file-requirements"
               onClick={() => inputRef.current?.click()}
-              onDragEnter={() => setDragging(true)}
-              onDragLeave={() => setDragging(false)}
-              onDragOver={(event) => event.preventDefault()}
+              onDragEnter={(event) => {
+                event.preventDefault();
+                if (!busy) {
+                  dragDepth.current += 1;
+                  setDragging(true);
+                }
+              }}
+              onDragLeave={(event) => {
+                event.preventDefault();
+                dragDepth.current = Math.max(0, dragDepth.current - 1);
+                if (!dragDepth.current) setDragging(false);
+              }}
+              onDragOver={(event) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = busy ? 'none' : 'copy';
+              }}
               onDrop={(event) => {
                 event.preventDefault();
+                dragDepth.current = 0;
                 setDragging(false);
-                choose(event.dataTransfer.files[0]);
+                if (event.dataTransfer.files[0]) choose(event.dataTransfer.files[0]);
               }}
-              className={`group flex min-h-60 w-full flex-col items-center justify-center rounded-xl border border-dashed px-6 text-center transition ${
-                dragging
-                  ? 'border-emerald-300 bg-emerald-400/10'
-                  : 'border-slate-700 bg-[#0a111f] hover:border-slate-500 hover:bg-[#0c1525]'
-              }`}
             >
-              {file ? (
-                <>
-                  <div className="grid size-14 place-items-center rounded-2xl bg-emerald-400/10 text-emerald-300">
-                    <FileVideo className="size-7" />
-                  </div>
-                  <p className="mt-4 max-w-full truncate font-medium text-white">
-                    {file.name}
-                  </p>
-                  <p className="mt-1 font-mono text-xs text-slate-500">
-                    {formatBytes(file.size)}
-                  </p>
-                  <span className="mt-4 text-xs text-emerald-300">
-                    Clique para trocar o arquivo
-                  </span>
-                </>
-              ) : (
-                <>
-                  <div className="grid size-14 place-items-center rounded-2xl border border-slate-700 bg-slate-800/60 text-slate-300 transition group-hover:border-emerald-400/30 group-hover:text-emerald-300">
-                    <UploadCloud className="size-7" />
-                  </div>
-                  <p className="mt-4 font-medium text-white">
-                    Arraste o vídeo aqui
-                  </p>
-                  <p className="mt-1 text-sm text-slate-500">
-                    ou toque para selecionar no dispositivo
-                  </p>
-                </>
-              )}
+              <span className="upload-symbol">
+                <HazeIcon name={file ? 'file' : 'upload'} />
+              </span>
+              <span className={`dropzone-title ${file ? 'selected-file-name' : ''}`}>
+                {file
+                  ? file.name
+                  : dragging
+                    ? 'Solte o vídeo aqui'
+                    : 'Arraste seu vídeo para cá'}
+              </span>
+              <span className="dropzone-description">
+                {file
+                  ? `${formatBytes(file.size)} · ${busy ? 'processamento local' : status === 'success' ? 'original preservado' : 'pronto para análise'}`
+                  : 'ou escolha um arquivo no seu dispositivo'}
+              </span>
+              <span className="file-select-label">
+                {busy
+                  ? 'Processamento local em andamento'
+                  : file
+                    ? 'Trocar arquivo'
+                    : 'Escolher arquivo'}
+                {!busy && <HazeIcon name="arrow" />}
+              </span>
             </button>
             <input
               ref={inputRef}
               type="file"
               accept="video/mp4,.mp4,.m4v"
               className="sr-only"
-              onChange={(event) => choose(event.target.files?.[0])}
+              tabIndex={-1}
+              aria-label="Arquivo de vídeo"
+              disabled={busy}
+              onChange={(event) => {
+                if (event.target.files?.[0]) choose(event.target.files[0]);
+                event.target.value = '';
+              }}
             />
-
-            <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-center gap-2 text-xs text-slate-500">
-                <LockKeyhole className="size-3.5 text-emerald-400" />
-                O arquivo nunca sai deste dispositivo.
-              </div>
-              <Button
-                size="lg"
-                disabled={!file || status === 'running'}
-                onClick={processFile}
-                className="h-11 gap-2 bg-emerald-400 px-5 font-semibold text-emerald-950 hover:bg-emerald-300"
-              >
-                {status === 'running' ? (
-                  <LoaderCircle className="animate-spin" />
-                ) : (
-                  <ScanSearch />
-                )}
-                {status === 'running' ? 'Processando…' : 'Analisar e processar'}
-              </Button>
+            <div id="file-requirements" className="file-requirements">
+              <span>MP4 ou M4V</span>
+              <span>Áudio AAC</span>
+              <span>Até 1 GiB</span>
             </div>
-
+            <div className="upload-actions">
+              <p className="privacy-note">
+                <HazeIcon name="lock" />
+                <span>
+                  Só no seu dispositivo.
+                  <br />
+                  <strong>Nenhum vídeo é enviado.</strong>
+                </span>
+              </p>
+              <div className="action-buttons">
+                {file && (
+                  <button
+                    type="button"
+                    className="icon-button"
+                    onClick={() => choose(null)}
+                    disabled={busy}
+                    aria-label="Remover arquivo selecionado"
+                    title="Remover arquivo"
+                  >
+                    <HazeIcon name="close" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="button button-primary"
+                  disabled={!file || busy}
+                  onClick={processFile}
+                >
+                  <HazeIcon
+                    name={status === 'running' ? 'spinner' : 'scan'}
+                    className={status === 'running' ? 'spin' : undefined}
+                  />
+                  {status === 'running' ? 'Processando…' : 'Analisar e processar'}
+                </button>
+              </div>
+            </div>
+            <output className="live-message sr-only" aria-live="polite">
+              {status === 'running'
+                ? progress.message
+                : status === 'success'
+                  ? 'Processamento concluído. Seu MP4 e o relatório estão disponíveis.'
+                  : file && status === 'idle'
+                    ? `Arquivo ${file.name} selecionado.`
+                    : ''}
+            </output>
             {status === 'running' && (
-              <div className="mt-5 rounded-xl border border-sky-400/15 bg-sky-400/5 p-4">
-                <Progress value={progress.percent} className="gap-2">
-                  <ProgressLabel className="text-xs text-sky-100">
-                    {progress.message}
-                  </ProgressLabel>
-                  <span className="ml-auto text-xs tabular-nums text-sky-300">
-                    {`${progress.percent}%`}
-                  </span>
-                </Progress>
+              <div className="processing-state">
+                <div className="progress-caption">
+                  <label htmlFor="haze-progress">{progress.message}</label>
+                  <span>{percent}%</span>
+                </div>
+                <progress id="haze-progress" max={100} value={percent}>
+                  {percent}%
+                </progress>
+                <p>Você pode manter esta aba aberta enquanto o Haze trabalha.</p>
               </div>
             )}
-
             {status === 'error' && (
-              <div
-                role="alert"
-                className="mt-5 flex gap-3 rounded-xl border border-rose-400/20 bg-rose-400/6 p-4"
-              >
-                <CircleX className="mt-0.5 size-4 shrink-0 text-rose-300" />
+              <div className="feedback feedback-error" role="alert">
+                <HazeIcon name="warning" />
                 <div>
-                  <p className="text-sm font-medium text-rose-100">
-                    Arquivo incompatível
-                  </p>
-                  <p className="mt-1 text-xs leading-5 text-rose-100/65">
-                    {error}
-                  </p>
+                  <h3>Não foi possível processar</h3>
+                  <p>{error}</p>
+                  <a href="#compatibilidade">
+                    Conferir os requisitos <HazeIcon name="arrow" />
+                  </a>
                 </div>
               </div>
             )}
-
             {status === 'success' && download && (
-              <div className="mt-5 flex flex-col gap-4 rounded-xl border border-emerald-400/20 bg-emerald-400/6 p-4 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex gap-3">
-                  <ShieldCheck className="mt-0.5 size-5 shrink-0 text-emerald-300" />
-                  <div>
-                    <p className="text-sm font-medium text-emerald-100">
-                      Variante Haze criada localmente
-                    </p>
-                    <p className="mt-1 text-xs text-emerald-100/55">
-                      Payload de mídia reutilizado sem recodificação.
-                    </p>
-                  </div>
+              <div className="feedback feedback-success">
+                <HazeIcon name="check" />
+                <div className="success-copy">
+                  <h3>Seu MP4 está pronto.</h3>
+                  <p>Variante criada localmente, sem recodificação.</p>
+                  <p className="output-filename">
+                    {download.name} · {formatBytes(download.blob.size)}
+                  </p>
                 </div>
                 <button
                   type="button"
+                  className="button button-success"
                   disabled={saving}
                   onClick={downloadMp4}
-                  className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-emerald-400 px-4 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 disabled:cursor-wait disabled:opacity-70"
                 >
-                  {saving ? (
-                    <LoaderCircle className="size-4 animate-spin" />
-                  ) : (
-                    <Download className="size-4" />
-                  )}
+                  <HazeIcon
+                    name={saving ? 'spinner' : 'download'}
+                    className={saving ? 'spin' : undefined}
+                  />
                   {saving ? 'Salvando…' : 'Baixar MP4'}
                 </button>
               </div>
             )}
-
             {saveError && (
-              <div
-                role="alert"
-                className="mt-3 rounded-lg border border-amber-400/20 bg-amber-400/6 px-4 py-3 text-xs leading-5 text-amber-100/75"
-              >
+              <div className="feedback feedback-error" role="alert">
+                <HazeIcon name="warning" />
                 <p>{saveError}</p>
               </div>
             )}
-
             {saveNotice && (
-              <output
-                className="mt-3 block rounded-lg border border-emerald-400/20 bg-emerald-400/6 px-4 py-3 text-xs leading-5 text-emerald-100/75"
-              >
+              <output className="save-notice" aria-live="polite">
+                <HazeIcon name="check" />
                 {saveNotice}
               </output>
             )}
-          </section>
+          </div>
 
-          <aside className="space-y-5">
-            <section className="rounded-2xl border border-white/10 bg-card p-5">
-              <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                O que será alterado
-              </p>
-              <div className="mt-5 space-y-4">
-                {[
-                  ['01', 'Fast start', 'Move moov antes do mdat'],
-                  ['02', 'Timeline', 'Remove edts das tracks'],
-                  ['03', 'Track AAC', 'Clona e estende com amostras'],
-                  ['04', 'Trailer', 'Grava a assinatura observada'],
-                ].map(([step, title, detail]) => (
-                  <div key={step} className="grid grid-cols-[28px_1fr] gap-3">
-                    <span className="font-mono text-xs text-emerald-400">
-                      {step}
-                    </span>
+          <aside className="workspace-aside">
+            <section className="process-panel panel" aria-labelledby="process-title">
+              <p className="eyebrow">SEM CAIXA-PRETA</p>
+              <h2 id="process-title">O que será alterado</h2>
+              <ol className="transformation-list">
+                {transformations.map(([title, detail], index) => (
+                  <li key={title}>
+                    <span className="transformation-number">0{index + 1}</span>
                     <div>
-                      <p className="text-sm font-medium text-slate-200">
-                        {title}
-                      </p>
-                      <p className="mt-0.5 text-xs leading-5 text-slate-500">
-                        {detail}
-                      </p>
+                      <h3>{title}</h3>
+                      <p>{detail}</p>
                     </div>
-                  </div>
+                  </li>
                 ))}
-              </div>
-            </section>
-
-            <section className="rounded-2xl border border-amber-400/15 bg-amber-400/5 p-5">
-              <div className="flex gap-3">
-                <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-300" />
-                <div>
-                  <p className="text-sm font-medium text-amber-100">
-                    Resultado experimental
-                  </p>
-                  <p className="mt-1 text-xs leading-5 text-amber-100/55">
-                    A estrutura observada contém dados fora do mdat. Não existe
-                    garantia de qualidade ou tratamento diferente por
-                    plataformas.
-                  </p>
-                </div>
-              </div>
-            </section>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-xl border border-white/8 bg-white/3 p-4">
-                <Check className="size-4 text-emerald-400" />
-                <p className="mt-3 text-xs font-medium text-slate-200">
-                  Vídeo preservado
+              </ol>
+              <div className="preserved-note">
+                <HazeIcon name="shield" />
+                <p>
+                  Os streams compatíveis são reutilizados{' '}
+                  <strong>sem recodificação.</strong>
                 </p>
               </div>
-              <div className="rounded-xl border border-white/8 bg-white/3 p-4">
-                <Download className="size-4 text-sky-400" />
-                <p className="mt-3 text-xs font-medium text-slate-200">
-                  Download local
+            </section>
+            <section className="experimental-note" aria-labelledby="experimental-title">
+              <HazeIcon name="warning" />
+              <div>
+                <h3 id="experimental-title">Um experimento, não uma promessa.</h3>
+                <p>
+                  A saída não é compatível com ISO BMFF: contém dados fora do mdat. Não
+                  há garantia de mais qualidade ou de tratamento diferente por
+                  plataformas.
                 </p>
               </div>
-            </div>
+            </section>
           </aside>
-        </div>
+        </section>
 
         {report && (
-          <section className="mt-5 rounded-2xl border border-white/10 bg-card p-5 sm:p-6">
-            <div className="flex flex-col gap-3 border-b border-white/8 pb-5 sm:flex-row sm:items-end sm:justify-between">
+          <section className="report-panel panel" aria-labelledby="report-title">
+            <div className="report-heading">
               <div>
-                <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-400">
-                  Relatório da transformação
-                </p>
-                <h3 className="mt-1 text-xl font-semibold text-white">
-                  Payload preservado, contêiner alterado
-                </h3>
+                <p className="eyebrow">RESULTADO DO PROCESSAMENTO</p>
+                <h2 id="report-title">Cada alteração, às claras.</h2>
               </div>
-              <Badge
-                variant="outline"
-                className="border-amber-400/25 bg-amber-400/8 text-amber-200"
-              >
-                NOT ISO BMFF COMPLIANT
-              </Badge>
+              <span className="report-badge">
+                <HazeIcon name="warning" /> Não conforme a ISO BMFF
+              </span>
             </div>
-
-            <dl className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <dl className="report-grid">
               {[
                 ['Entrada', formatBytes(report.inputSize)],
                 ['Saída', formatBytes(report.outputSize)],
                 ['Áudio', `${report.audioSampleEntry} · preservado`],
-                [
-                  'Tracks',
-                  `${report.originalTrackCount} → ${report.outputTrackCount}`,
-                ],
-                [
-                  'Amostras AAC',
-                  report.originalAudioSamples.toLocaleString('pt-BR'),
-                ],
-                [
-                  'Amostras artificiais',
-                  report.dummySamples.toLocaleString('pt-BR'),
-                ],
+                ['Tracks', `${report.originalTrackCount} → ${report.outputTrackCount}`],
+                ['Amostras AAC', report.originalAudioSamples.toLocaleString('pt-BR')],
+                ['Amostras artificiais', report.dummySamples.toLocaleString('pt-BR')],
                 ['Trailer', formatBytes(report.trailerSize)],
                 ['Classificação', report.classification],
               ].map(([label, value]) => (
-                <div
-                  key={label}
-                  className="rounded-xl border border-white/7 bg-[#0a111f] p-4"
-                >
-                  <dt className="font-mono text-[10px] uppercase tracking-[0.14em] text-slate-500">
-                    {label}
-                  </dt>
-                  <dd className="mt-2 text-sm font-medium text-slate-200">
-                    {value}
-                  </dd>
+                <div key={label}>
+                  <dt>{label}</dt>
+                  <dd>{value}</dd>
                 </div>
               ))}
             </dl>
-
-            <div className="mt-4 grid gap-3 lg:grid-cols-2">
-              <div className="rounded-xl border border-white/7 bg-[#0a111f] p-4">
-                <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-slate-500">
-                  Layout
-                </p>
-                <p className="mt-2 font-mono text-xs leading-5 text-slate-300">
-                  {report.inputLayout.join(' · ')}
-                  <span className="mx-2 text-slate-600">→</span>
-                  {report.outputLayout.join(' · ')}
+            <div className="report-details">
+              <div>
+                <h3>Layout do contêiner</h3>
+                <p className="layout-value">
+                  <span>{report.inputLayout.join(' · ')}</span>
+                  <HazeIcon name="arrow" />
+                  <span>{report.outputLayout.join(' · ')}</span>
                 </p>
               </div>
-              <div className="rounded-xl border border-white/7 bg-[#0a111f] p-4">
-                <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-slate-500">
-                  SHA-256 do mdat
-                </p>
-                <p className="mt-2 break-all font-mono text-[11px] leading-5 text-slate-300">
-                  {report.mdatSha256 ??
-                    'Não calculado para mdat acima de 256 MiB'}
+              <div>
+                <h3>SHA-256 do mdat</h3>
+                <p className="hash-value">
+                  {report.mdatSha256 ?? 'Não calculado para mdat acima de 256 MiB.'}
                 </p>
               </div>
             </div>
           </section>
         )}
-      </section>
-    </main>
+
+        <section
+          id="compatibilidade"
+          className="compatibility-section"
+          aria-labelledby="compatibility-title"
+        >
+          <div className="compatibility-intro">
+            <p className="eyebrow">ANTES DE COMEÇAR</p>
+            <h2 id="compatibility-title">
+              Bom saber.
+              <br />
+              <span>Melhor entender.</span>
+            </h2>
+            <p>
+              O Haze valida a estrutura antes de gerar qualquer saída. O arquivo
+              original nunca é alterado.
+            </p>
+            <a
+              className="text-link"
+              href="https://github.com/alisonxz9g-hub/haze#compatibilidade"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Documentação técnica <HazeIcon name="external" />
+            </a>
+          </div>
+          <div className="faq-list">
+            <details>
+              <summary>
+                Quais arquivos são compatíveis?
+                <HazeIcon name="chevron" />
+              </summary>
+              <div className="faq-answer">
+                <p>
+                  MP4 ou M4V de até 1 GiB, não fragmentado, com exatamente uma track de
+                  vídeo e uma de áudio AAC (mp4a).
+                </p>
+                <p>
+                  São necessários ftyp, moov e mdat únicos, metadata ilst e tabelas
+                  stco, stsc, stsz variável e stts consistentes. Arquivos com co64 são
+                  recusados. Áudio Opus precisa ser convertido para AAC antes.
+                </p>
+              </div>
+            </details>
+            <details>
+              <summary>
+                O resultado melhora a qualidade do vídeo?
+                <HazeIcon name="chevron" />
+              </summary>
+              <div className="faq-answer">
+                <p>
+                  Não há essa garantia. O Haze replica uma transformação experimental de
+                  contêiner: ele não melhora a imagem nem promete menos compressão em
+                  plataformas.
+                </p>
+                <p>
+                  A saída contém um trailer fora dos boxes e não é conforme ao padrão
+                  ISO BMFF. Guarde sempre o original e teste a compatibilidade do
+                  resultado.
+                </p>
+              </div>
+            </details>
+            <details>
+              <summary>
+                Como funciona o download no celular?
+                <HazeIcon name="chevron" />
+              </summary>
+              <div className="faq-answer">
+                <p>
+                  No Chrome 132 ou mais recente para Android, com o seletor disponível e
+                  o site em HTTPS, o botão Baixar MP4 permite escolher onde salvar o
+                  arquivo diretamente.
+                </p>
+                <p>
+                  Em outros navegadores, o Haze tenta o download convencional. A
+                  disponibilidade depende do navegador e do sistema. Nenhum vídeo é
+                  enviado a um servidor.
+                </p>
+              </div>
+            </details>
+          </div>
+        </section>
+      </main>
+      <footer className="site-footer page-shell">
+        <p>
+          <span className="footer-brand">haze.</span> Observed Engine 4.0
+        </p>
+        <p>Local por natureza. Experimental por definição.</p>
+        <a href="#laboratorio">
+          Voltar ao laboratório <HazeIcon name="arrow" />
+        </a>
+      </footer>
+    </div>
   );
 }
